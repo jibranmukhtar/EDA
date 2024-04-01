@@ -4,7 +4,7 @@ import scipy.stats
 from statsmodels.stats.proportion import proportions_chisquare
 
 df = pd.DataFrame({
-    'a': [np.nan] + [1]*99 + [np.nan]*99 + [2],
+    'a': [np.nan] + [True]*99 + [np.nan]*99 + [False],
     'mycat': ['a']*100 + ['b']*100,
     'mysort': ['c','d']*100
 })
@@ -19,7 +19,7 @@ def evaluate_data(df:pd.DataFrame,comparison_groups:list[list]):
         ser = df[var]
         # Dict to hold all info about this variable
         var_dict = dict()
-        var_dict['Nulls'] = null_info(ser)
+        var_dict['Null Info'] = null_info(ser)
         var_dict['Unique'] = ser.unique()
         
         # Record the type of the variable
@@ -38,14 +38,13 @@ def evaluate_data(df:pd.DataFrame,comparison_groups:list[list]):
         # Comparisons Across Groups
         var_dict['Comparisons'] = dict()
         for comparison_group in comparison_groups:
-            comparison_group_dict = dict()
-
-            # Compare nulls
-            comparison_group_dict['Nulls'] = compare_nulls_across_groups(
+            comparison_group_dict = do_comparison(
                 comparison_group=comparison_group,
                 var=var,
-                has_nulls = bool(var_dict['Nulls']['Count'] > 0),
-                var_df = df[comparison_group + [var]]
+                has_nulls=var_dict['Null Info']['Count'] > 0,
+                var_df = df[comparison_group + [var]],
+                type=var_dict['Type'],
+                var_stats = var_dict['Stats']
             )
             
             var_dict['Comparisons'][str(comparison_group)] = comparison_group_dict
@@ -59,6 +58,144 @@ def evaluate_data(df:pd.DataFrame,comparison_groups:list[list]):
         
         info_dict[var] = var_dict
     return info_dict
+
+def do_comparison(
+    comparison_group:list[str],
+    var:str,
+    has_nulls:bool,
+    var_df:pd.DataFrame,
+    type:str,
+    var_stats:dict
+):
+    # Instantiate Comparison
+    comparison_dict = dict()
+    
+    # Compare nulls
+    comparison_dict['Nulls'] = compare_nulls_across_groups(
+        comparison_group=comparison_group,
+        var=var,
+        has_nulls = has_nulls,
+        var_df = var_df
+    )
+    
+    # Now we do some other comparisons based on the variable type
+    if type in ['Constant','Constant With Nulls']:
+        pass
+    elif type in ['Binary Bool','Binary Numerical']:
+        comparison_dict['Proportion True'] = compare_proportion_true(
+            var_df=var_df,
+            var=var,
+            comparison_group=comparison_group
+        )
+    elif type == 'Numerical':
+        comparison_dict['Frequency Outliers'] = compare_all_frequency_outliers(
+            var_stats=var_stats,
+            var_df=var_df,
+            var=var,
+            comparison_group=comparison_group
+        )
+        # TODO comparison_dict['Mean'] = compare_mean()
+        
+    elif type in ['Categorical', 'Binary Categorical']:
+        # TODO comparison_dict['Value Shares'] = compare_all_value_shares()
+        # TODO comparison_dict['Unique'] = compare_unique_values()
+        comparison_dict['Still Need to edit this'] = 'really'
+    
+    return comparison_dict
+    
+def compare_all_frequency_outliers(
+    var_stats:dict,
+    var_df:pd.DataFrame,
+    var:str,
+    comparison_group:list[str]
+):
+    if var_stats['Frequency Outlier Count'] <= 0:
+        return 'No Frequency Outliers'
+    else:
+        freq_outliers_dict = dict()
+        for i, row in var_stats['Frequency Outliers'].iterrows():
+            value = row['Value']
+            freq_outliers_dict[value] = compare_value_share(
+                value=value,
+                var_df=var_df,
+                var=var,
+                comparison_group=comparison_group
+            )
+        
+
+def compare_value_share(
+    value,
+    var_df:pd.DataFrame,
+    var:str,
+    comparison_group:list[str]
+):
+    var_df['Is Value'] = np.select(
+        [
+            var_df[var].isnull(),
+            var_df[var] == value
+        ],
+        [
+            np.nan,
+            1
+        ],
+        0
+    )
+    group_object = (
+        var_df[comparison_group+['Is Value']]
+        .groupby(by=comparison_group)
+    )
+    group_df = (
+        group_object
+        .sum()
+        .reset_index()
+        .rename(columns={'Is Value':'Count Of Value'})
+    )
+    group_df = group_df.merge(
+        how='left',
+        on=comparison_group,
+        right=(
+            group_object
+            .count()
+            .reset_index()
+            .rename(columns={'Is Value':'Total Obs'})
+        )
+    )
+    return equal_proportions_test_many_samples(
+        n_list=list(group_df['Total Obs']),
+        hits_list=list(group_df['Count of Value'])
+    )
+    
+def compare_proportion_true(
+    var_df:pd.DataFrame,
+    var:str,
+    comparison_group:list[str]
+):
+    var_df['Binary As Float'] = var_df[var].astype(float)
+    group_object = (
+        var_df[comparison_group + ['Binary As Float']]
+        .groupby(by=comparison_group)
+    )
+    group_df = (
+        group_object
+        .sum()
+        .reset_index()
+        .rename(columns={'Binary As Float':'Number True'})
+    )
+    group_df = group_df.merge(
+        how='left',
+        on=comparison_group,
+        right= (
+            group_object
+            .count()
+            .reset_index()
+            .rename(columns={'Binary As Float':'Total Obs'})
+        )
+    )
+    return equal_proportions_test_many_samples(
+        n_list=list(group_df['Total Obs']),
+        hits_list=list(group_df['Number True'])
+    )
+  
 
 def get_stats(var_type:str, ser:pd.Series, var:str):
     '''get summary statistics on the variable over the whole table.
