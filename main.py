@@ -97,12 +97,68 @@ def do_comparison(
         # TODO comparison_dict['Mean'] = compare_mean()
         
     elif type in ['Categorical', 'Binary Categorical']:
-        # TODO comparison_dict['Value Shares'] = compare_all_value_shares()
-        # TODO comparison_dict['Unique'] = compare_unique_values()
+        comparison_dict['Value Shares'] = compare_all_value_shares()
+        comparison_dict['Unique Values'] = compare_unique_values()
         comparison_dict['Still Need to edit this'] = 'really'
     
     return comparison_dict
     
+def compare_unique_values(
+    var_df:pd.DataFrame,
+    comparison_group:list[str],
+    var:str,
+):
+    unique_vals_dict = dict()
+    
+    unique_ser = (
+        var_df
+        .groupby(by=comparison_group)
+        .apply(lambda group_df: group_df[var].unique())
+    )
+    unique_df = unique_ser.reset_index().rename(columns={0:'Unique Set'})
+    unique_df['Group String'] = ', '.join()
+    all_sets = [set(s) for s in unique_ser]
+    intersection = set.intersection(*all_sets)
+    vals_of_interest = list(set(var_df[var].unique()) - intersection)
+    if len(vals_of_interest) <= 0:
+        return 'All Groups Share Common Support'
+    else:
+        val_of_interest_df = pd.DataFrame()
+        groups_including_col = []
+        groups_excluding_col = []
+        for val in vals_of_interest:
+            groups_with_val = []
+            groups_without_val = []
+            for _, row in unique_df.iterrows():
+                if val in row['Unique Set']:
+                    groups_with_val.append(list(row[comparison_group]))
+                else:
+                    groups_without_val.append(list(row[comparison_group]))
+            groups_including_col.append(groups_with_val)
+            groups_excluding_col.append(groups_without_val)
+        val_of_interest_df = pd.DataFrame({
+            'Value': vals_of_interest,
+            'Groups Including Value': groups_including_col,
+            'Groups Excluding Value': groups_excluding_col
+        }).set_index('Value')
+    return val_of_interest_df
+
+def compare_all_value_shares(
+    var_df:pd.DataFrame,
+    var:str,
+    comparison_group:list[str]
+):
+    value_shares_dict = dict()
+    for val in var_df[var].unique():
+        value_shares_dict[val] = compare_value_share(
+            value=val,
+            var_df=var_df,
+            var=var,
+            comparison_group=comparison_group
+        )
+    return value_shares_dict
+
+ 
 def compare_all_frequency_outliers(
     var_stats:dict,
     var_df:pd.DataFrame,
@@ -121,8 +177,8 @@ def compare_all_frequency_outliers(
                 var=var,
                 comparison_group=comparison_group
             )
+    
         
-
 def compare_value_share(
     value,
     var_df:pd.DataFrame,
@@ -164,6 +220,7 @@ def compare_value_share(
         n_list=list(group_df['Total Obs']),
         hits_list=list(group_df['Count of Value'])
     )
+   
     
 def compare_proportion_true(
     var_df:pd.DataFrame,
@@ -195,7 +252,7 @@ def compare_proportion_true(
         n_list=list(group_df['Total Obs']),
         hits_list=list(group_df['Number True'])
     )
-  
+
 
 def get_stats(var_type:str, ser:pd.Series, var:str):
     '''get summary statistics on the variable over the whole table.
@@ -222,6 +279,7 @@ def get_stats(var_type:str, ser:pd.Series, var:str):
     elif var_type in ['Categorical', 'Binary Categorical']:
         return get_categorical_stats(ser,var)
 
+
 def get_categorical_stats(ser:pd.Series, var:str):
     my_dict = dict()
     my_dict['Count Non Missing'] = len(ser.dropna())
@@ -233,6 +291,7 @@ def get_categorical_stats(ser:pd.Series, var:str):
     my_df['Proportion'] = my_df['Count']/my_dict['Count Non Missing']
     my_dict['Counts And Proportions'] = my_df
     return my_dict
+
 
 def get_numerical_stats(ser:pd.Series,var:str):
     my_dict = dict()
@@ -286,6 +345,7 @@ def get_numerical_stats(ser:pd.Series,var:str):
     )
     return my_dict
 
+
 def get_binary_stats(ser:pd.Series):
     my_dict = dict()
     my_dict['Not Null Count'] = len(ser.dropna())
@@ -298,6 +358,7 @@ def get_binary_stats(ser:pd.Series):
         my_dict['False Count']/my_dict['Not Null Count']
     )
     return my_dict
+
 
 def compare_nulls_across_groups(
     comparison_group:list,
@@ -340,6 +401,7 @@ def compare_nulls_across_groups(
             )
         )
 
+
 def get_variable_type(unique_array:np.ndarray, is_numerical:bool):
     if len(unique_array) == 1:
         return 'Constant'
@@ -360,6 +422,7 @@ def get_variable_type(unique_array:np.ndarray, is_numerical:bool):
         else:
             return 'Categorical'
     
+    
 def null_info(ser:pd.Series):
     '''Get info on the nulls of a series.'''
     if len(ser) == 0:
@@ -368,6 +431,7 @@ def null_info(ser:pd.Series):
     null_info['Count'] = ser.isna().sum()
     null_info['Proportion'] = null_info['Count']/len(ser)
     return null_info
+
 
 def equal_proportions_test_two_samples(n_a:int, p_hat_a:float, n_b:int, p_hat_b:float):
     p_hat = (
@@ -384,6 +448,7 @@ def equal_proportions_test_two_samples(n_a:int, p_hat_a:float, n_b:int, p_hat_b:
     test_info['Z-score'] = z
     test_info['P-value'] = scipy.stats.norm.sf(abs(z))*2
     return test_info
+
 
 def equal_proportions_test_many_samples(n_list:list, hits_list:list):
     test = proportions_chisquare(
