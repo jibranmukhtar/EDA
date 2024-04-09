@@ -9,10 +9,12 @@ df = pd.DataFrame({
     'mysort': ['c','d']*100
 })
 
-def evaluate_data(df:pd.DataFrame,comparison_groups:list[list]):
+def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
     
     # Define a dictionary where all info will go
     info_dict = dict()
+    # Define a dict to store all of the things you may want to look at
+    warning_dict = dict()
 
     # First get summary info for all variables:
     for var in df.columns:
@@ -328,16 +330,11 @@ def get_numerical_stats(ser:pd.Series,var:str):
     freq_avg = freq_df['count'].mean()
     freq_std = freq_df['count'].std()
     freq_df['Is Outlier'] = np.where(
-        freq_df['count'] > freq_avg + 3*freq_std,
+        freq_df['count'] > freq_avg + 2*freq_std,
         1,
         0
     )
     my_dict['Frequency Outlier Count'] = freq_df['Is Outlier'].sum()
-    freq_outliers = []
-    for i,row in freq_df[freq_df['Is Outlier']==1].iterrows():
-        freq_outliers.append(
-            [row['Value'],row['count']]
-        )
     my_dict['Frequency Outliers'] = (
         freq_df[freq_df['Is Outlier']==1]
         [['Value','count']]
