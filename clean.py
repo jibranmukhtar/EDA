@@ -27,30 +27,31 @@ def make_df_numerical(
     '''
     
     # This holds info about each of the variables in df
-    og_info = dict()
-    # This holds info about each of the variables that would be in the
-    # final transformed version of df
-    new_info = dict()
+    notes = dict()
     # Instantiate a list that will hold all the columns of num_df (to be
     # concatenated into a df at the end)
     num_df_cols_list = []
     # Get info on type for each variable in df
     for var in df.columns:
-        og_var_info = dict()
+        var_info = dict()
         # Make a series version for easier access
         og_ser = df[var]
         # Some values that will be usefull no matter what.
         has_nulls = og_ser.isnull().any()
+        var_info['Has Nulls'] = has_nulls
         unique_vals = og_ser.unique()
+        var_info['Unique Vals'] = unique_vals
         var_type = summary.get_variable_type(
             unique_array=unique_vals,
             is_numerical=pd.api.types.is_numeric_dtype(og_ser)
         )
-        og_var_info['Type'] = var_type
-        
+        var_info['Type'] = var_type
+        # 'New Vars' is a list of the new variables made from the current var.
+        var_info['New Vars'] = []
         # Assemble the new numerical-only data frame column by column
         if var_type == 'Constant':
             val = og_ser[1]
+            var_info['Constant Val'] = val
             new_col = pd.Series(
                 np.where(
                     og_ser == True,
@@ -60,7 +61,9 @@ def make_df_numerical(
                 name=f'{var}: {val}'
             )
             num_df_cols_list.append(new_col)
+            var_info['New Vars'].append(f'{var}: {val}')
         if var_type == 'Constant With Nulls':
+            # Column to indicate nulls
             null_col = pd.Series(
                 np.where(
                     og_ser.isnull(),
@@ -70,6 +73,8 @@ def make_df_numerical(
                 name=f'{var}: Null'
             )
             num_df_cols_list.append(null_col)
+            var_info['New Vars'].append(f'{var}: Null')
+            # Column to indicate non-null value
             val = og_ser.dropna().iloc[0]
             nonnull_col = pd.Series(
                 np.where(
@@ -80,9 +85,10 @@ def make_df_numerical(
                 name=f'{var}: {val}'
             )
             num_df_cols_list.append(nonnull_col)
+            var_info['New Vars'].append(f'{var}: {val}')
         if var_type == 'Binary Bool':
             nullfill = null_replacements.get(var,og_ser.mean())
-            og_var_info['Null Fill'] = nullfill
+            var_info['Null Fill'] = nullfill
             bool_col = pd.Series(
                 np.select(
                     [
@@ -98,6 +104,7 @@ def make_df_numerical(
                 name=var
             )
             num_df_cols_list.append(bool_col)
+            var_info['New Vars'].append(var)
             if has_nulls:
                 null_col = pd.Series(
                     np.where(
@@ -108,9 +115,10 @@ def make_df_numerical(
                     name=f'{var}: Null'
                 )
                 num_df_cols_list.append(null_col)
+                var_info['New Vars'].append(f'{var}: Null')
         if var_type == 'Binary Numerical':
             nullfill = null_replacements.get(var,og_ser.mean())
-            og_var_info['Null Fill'] = nullfill
+            var_info['Null Fill'] = nullfill
             bool_col = pd.Series(
                 np.select(
                     [
@@ -126,6 +134,7 @@ def make_df_numerical(
                 name=var
             )
             num_df_cols_list.append(bool_col)
+            var_info['New Vars'].append(var)
             if has_nulls:
                 null_col = pd.Series(
                     np.where(
@@ -136,6 +145,7 @@ def make_df_numerical(
                     name=f'{var}: Null'
                 )
                 num_df_cols_list.append(null_col)
+                var_info['New Vars'].append(f'{var}: Null')
         if var_type in ['Binary Categorical', 'Categorical']:
             for val in og_ser.unique():
                 col = pd.Series(
@@ -147,28 +157,7 @@ def make_df_numerical(
                     name=f'{var}: {val}'
                 )
                 num_df_cols_list.append(col)
-            if has_nulls:
-                if has_nulls:
-                    null_col = pd.Series(
-                        np.where(
-                            og_ser.isnull(),
-                            1,
-                            0
-                        ),
-                        name=f'{var}: Null'
-                    )
-                    num_df_cols_list.append(null_col)
-        if var_type == 'Numerical':
-            nullfill = null_replacements.get(var,og_ser.mean())
-            col = pd.Series(
-                np.where(
-                    og_ser.isnull(),
-                    nullfill,
-                    og_ser
-                ),
-                name=var
-            )
-            num_df_cols_list.append(col)
+                var_info['New Vars'].append(f'{var}: {val}')
             if has_nulls:
                 null_col = pd.Series(
                     np.where(
@@ -179,14 +168,35 @@ def make_df_numerical(
                     name=f'{var}: Null'
                 )
                 num_df_cols_list.append(null_col)
+                var_info['New Vars'].append(f'{var}: Null')
+        if var_type == 'Numerical':
+            nullfill = null_replacements.get(var,og_ser.mean())
+            var_info['Null Fill'] = nullfill
+            col = pd.Series(
+                np.where(
+                    og_ser.isnull(),
+                    nullfill,
+                    og_ser
+                ),
+                name=var
+            )
+            num_df_cols_list.append(col)
+            var_info['New Vars'].append(var)
+            if has_nulls:
+                null_col = pd.Series(
+                    np.where(
+                        og_ser.isnull(),
+                        1,
+                        0
+                    ),
+                    name=f'{var}: Null'
+                )
+                num_df_cols_list.append(null_col)
+                var_info['New Vars'].append(f'{var}: Null')
         
-        og_info[var] = og_var_info
-        
-    notes = {
-        'Original Vars': og_info,
-        'Transformed Vars': new_info
-    }
+        notes[var] = var_info
     
     num_df = pd.concat(num_df_cols_list, axis=1)
     
     return num_df, notes
+
