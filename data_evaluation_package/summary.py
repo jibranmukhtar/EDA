@@ -144,7 +144,6 @@ def do_comparison(
             comparison_group=comparison_group,
             var=var
         )
-        comparison_dict['Still Need to edit this'] = 'really'
     
     return comparison_dict
     
@@ -181,7 +180,6 @@ def compare_unique_values(
         .apply(lambda group_df: group_df[var].unique())
     )
     unique_df = unique_ser.reset_index().rename(columns={0:'Unique Set'})
-    unique_df['Group String'] = ', '.join()
     all_sets = [set(s) for s in unique_ser]
     intersection = set.intersection(*all_sets)
     vals_of_interest = list(set(var_df[var].unique()) - intersection)
@@ -307,6 +305,7 @@ def compare_value_share(
         the null hypothesis that the proportion of the sample with this
         value for var is the same across groups.
     '''
+    var_df = var_df.copy()
     var_df['Is Value'] = np.select(
         [
             var_df[var].isnull(),
@@ -340,7 +339,7 @@ def compare_value_share(
     )
     return equal_proportions_test_many_samples(
         n_list=list(group_df['Total Obs']),
-        hits_list=list(group_df['Count of Value'])
+        hits_list=list(group_df['Count Of Value'])
     )
    
     
@@ -551,6 +550,7 @@ def compare_nulls_across_groups(
     if not has_nulls:
         return 'No Nulls'
     else:
+        var_df = var_df.copy()
         var_df['Is Null'] = np.where(
             var_df[var].isnull(),
             1,

@@ -2,11 +2,11 @@
 import pandas as pd
 import numpy as np
 
-import summary
+from .summary import get_variable_type
 
 def make_df_numerical(
     df:pd.DataFrame,
-    null_replacements:dict = dict(),
+    null_replacements:dict|None = None
 ):
     '''Transform the dataframe to be all numerical and non-missing
     
@@ -25,7 +25,9 @@ def make_df_numerical(
         notes:
             A dictionary with info about how the transformation was done
     '''
-    
+    # Set default value of null_replacements dict
+    if null_replacements == None:
+        null_replacements = dict()
     # This holds info about each of the variables in df
     notes = dict()
     # Instantiate a list that will hold all the columns of num_df (to be
@@ -41,7 +43,7 @@ def make_df_numerical(
         var_info['Has Nulls'] = has_nulls
         unique_vals = og_ser.unique()
         var_info['Unique Vals'] = unique_vals
-        var_type = summary.get_variable_type(
+        var_type = get_variable_type(
             unique_array=unique_vals,
             is_numerical=pd.api.types.is_numeric_dtype(og_ser)
         )
