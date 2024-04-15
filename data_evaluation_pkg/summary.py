@@ -364,6 +364,7 @@ def compare_proportion_true(
         the null hypothesis that the proportion of the sample with this
         value for var is the same across groups.
         '''
+    var_df = var_df.copy()
     var_df['Binary As Float'] = var_df[var].astype(float)
     group_object = (
         var_df[comparison_group + ['Binary As Float']]
