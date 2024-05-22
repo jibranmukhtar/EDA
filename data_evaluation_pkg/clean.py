@@ -201,4 +201,3 @@ def make_df_numerical(
     num_df = pd.concat(num_df_cols_list, axis=1)
     
     return num_df, notes
-
