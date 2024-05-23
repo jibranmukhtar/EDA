@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import scipy.stats
 from statsmodels.stats.proportion import proportions_chisquare
-
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+import itertools
 
 def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
     '''Variable summaries with tests for consistency across groups.
@@ -50,7 +51,7 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
                 comparison_group=comparison_group,
                 var=var,
                 has_nulls=var_dict['Null Info']['Count'] > 0,
-                var_df = df[comparison_group + [var]],
+                var_df = df[list(set(comparison_group + [var]))],
                 type=var_dict['Type'],
                 var_stats = var_dict['Stats']
             )
@@ -131,7 +132,11 @@ def do_comparison(
             var=var,
             comparison_group=comparison_group
         )
-        # TODO comparison_dict['Mean'] = compare_mean()
+        comparison_dict['Mean'] = compare_mean(
+            var_df=var_df,
+            comparison_group=comparison_group,
+            var=var,
+        )
         
     elif type in ['Categorical', 'Binary Categorical']:
         comparison_dict['Value Shares'] = compare_all_value_shares(
@@ -278,7 +283,67 @@ def compare_all_frequency_outliers(
                 var=var,
                 comparison_group=comparison_group
             )
+
+
+ def compare_mean(
+    var_df: pd.DataFrame, 
+    comparison_group: list[str], 
+    var: str):
+    # Get the unique values for each column in the comparison group
+    unique_values = [var_df[col].unique() for col in comparison_group]
     
+    # Get the cartesian product of these unique values
+    cartesian_product = list(itertools.product(*unique_values))
+    
+    # Initialize the dictionary to hold the means and collect group data
+    mean_dict = {}
+    group_labels = []
+    group_data = []
+    
+    # Calculate the mean for each group in the cartesian product
+    for group in cartesian_product:
+        # Create a boolean mask for the group
+        mask = pd.Series([True] * len(var_df))
+        for col, val in zip(comparison_group, group):
+            mask &= (var_df[col] == val)
+        
+        # Extract the data for the current group
+        group_data_subset = var_df.loc[mask, var]
+        mean_value = group_data_subset.mean()
+        
+        # Add the mean to the dictionary
+        mean_dict[group] = mean_value
+        
+        # Collect data and labels for Tukey's HSD test
+        group_labels.extend([str(group)] * len(group_data_subset))
+        group_data.extend(group_data_subset)
+    
+    # Convert group_data to a numpy array for compatibility with statsmodels
+    group_data = pd.Series(group_data).values
+    
+    # Perform Tukey's HSD test
+    tukey_result = pairwise_tukeyhsd(endog=group_data, groups=group_labels, alpha=0.05)
+    
+    # Extract the Tukey HSD results into a dictionary
+    tukey_dict = {}
+    for i in range(len(tukey_result.reject)):
+        group_pair = (tukey_result.groupsunique[tukey_result._multicomp.pairindices[0][i]], 
+                      tukey_result.groupsunique[tukey_result._multicomp.pairindices[1][i]])
+        tukey_dict[group_pair] = {
+            'meandiff': tukey_result.meandiffs[i],
+            'p-adj': tukey_result.pvalues[i],
+            'lower': tukey_result.confint[i][0],
+            'upper': tukey_result.confint[i][1],
+            'reject': tukey_result.reject[i]
+        }
+        
+    mean_results = {
+    'mean': mean_dict,
+    'tukey_results': tukey_dict
+    }
+    
+    return mean_results
+
         
 def compare_value_share(
     value,
