@@ -4,9 +4,15 @@ import numpy as np
 import scipy.stats
 from statsmodels.stats.proportion import proportions_chisquare
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from scipy.stats import f_oneway
 import itertools
+import warnings
+import logging
+import time
 
-def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
+
+
+def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 0.05 ):
     '''Variable summaries with tests for consistency across groups.
     
     Arguments:
@@ -15,16 +21,29 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
         comparison_groups:
             A list of lists of variables that defined groups across which
             we want to compare variables.
+        alpha:
+            Preferred Alpha threshhold across various tests done with the report
     
     Returns:
         info_dict:
-            A dictionary containing all the relevant information
+            A dictionary containing 3 strings: First with comprehensive report, 
+            second with summary, third with only flagged instances of the report.
     '''
+    # Filter out all warnings
+    warnings.filterwarnings("ignore")
+
+    # Configure logging. Uncomment the second line to disable logging.
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    #logging.disable(logging.CRITICAL)
+
     # Define a dictionary where all info will go
     info_dict = dict()
 
     # First get summary info for all variables:
-    for var in df.columns:
+    for idx, var in enumerate(df.columns, start=1):
+        #Note start time of the loop
+        start_time = time.time()
+
         ser = df[var]
         # Dict to hold all info about this variable
         var_dict = dict()
@@ -46,17 +65,21 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
         
         # Comparisons Across Groups
         var_dict['Comparisons'] = dict()
-        for comparison_group in comparison_groups:
-            comparison_group_dict = do_comparison(
-                comparison_group=comparison_group,
-                var=var,
-                has_nulls=var_dict['Null Info']['Count'] > 0,
-                var_df = df[list(set(comparison_group + [var]))],
-                type=var_dict['Type'],
-                var_stats = var_dict['Stats']
-            )
-            
-            var_dict['Comparisons'][str(comparison_group)] = comparison_group_dict
+        if (any(var in sublist for sublist in comparison_groups)):
+            var_dict['Comparisons'] = 'This column is part of comparison group'
+        else:
+            for comparison_group in comparison_groups:
+                comparison_group_dict = do_comparison(
+                    comparison_group=comparison_group,
+                    var=var,
+                    has_nulls=var_dict['Null Info']['Count'] > 0,
+                    var_df = df[list(set(comparison_group + [var]))],
+                    type=var_dict['Type'],
+                    var_stats = var_dict['Stats'],
+                    alpha = alpha
+                )
+                
+                var_dict['Comparisons'][str(comparison_group)] = comparison_group_dict
             
         
         # TODO: For numerical vars, check to see if there are any values
@@ -66,7 +89,25 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list]):
         
         
         info_dict[var] = var_dict
-    return info_dict
+
+        end_time = time.time()  # Record end time
+        duration = end_time - start_time  # Calculate duration
+        logging.info(f'\n{"": <0}Evaluation Successful ({idx}/{len(df.columns)}): {var:<{50}} (Duration: {duration:.2f} seconds)')
+
+
+    output = {
+        'detailed_report': build_tree_string(info_dict),
+        'summary_report': build_tree_string(create_summary(info_dict, alpha)),
+        'flag_report': build_tree_string(filter_concern_flags(create_summary(info_dict, alpha)))
+    }
+
+    return output
+        
+    
+    # Restore default warning settings
+    warnings.filterwarnings("default")
+
+    
 
 def do_comparison(
     comparison_group:list[str],
@@ -74,7 +115,8 @@ def do_comparison(
     has_nulls:bool,
     var_df:pd.DataFrame,
     type:str,
-    var_stats:dict
+    var_stats:dict,
+    alpha: float
 ):
     '''Compare a variable's values across subsets of the sample.
     
@@ -136,6 +178,7 @@ def do_comparison(
             var_df=var_df,
             comparison_group=comparison_group,
             var=var,
+            alpha = alpha
         )
         
     elif type in ['Categorical', 'Binary Categorical']:
@@ -284,11 +327,42 @@ def compare_all_frequency_outliers(
                 comparison_group=comparison_group
             )
 
+def compare_mean(
+    var_df: pd.DataFrame,
+    comparison_group: list[str],
+    var: str,
+    alpha: float
+):
 
- def compare_mean(
-    var_df: pd.DataFrame, 
-    comparison_group: list[str], 
-    var: str):
+    '''Compare means of a numerical variable across groups defined by 
+    combinations of categorical variables and perform ANOVA and Tukey's HSD test.
+
+    Arguments:
+        var_df:
+            A dataframe containing the values of the variable being analyzed
+            and the variables in the comparison_group.
+        comparison_group:
+            A list of column names whose unique combination of values defines a 
+            group.
+        var:
+            The name of the numeric variable for which the means are to be compared.
+        alpha:
+            The significance level for the statistical tests (default is 0.05).
+            
+    Returns:
+        mean_dict:
+            A dictionary containing the means of the numeric variable for each 
+            unique combination of values from the comparison_group.
+        anova_dict:
+            A dictionary containing the results of the ANOVA test, including the
+            F-statistic, p-value, and a boolean indicating whether the null hypothesis
+            is rejected.
+        tukey_dict:
+            A dictionary containing the results of Tukey's HSD test, with each key being 
+            a tuple of group pairs and the value being another dictionary containing the
+            mean difference, adjusted p-value, confidence interval, and the reject boolean.
+    '''
+    
     # Get the unique values for each column in the comparison group
     unique_values = [var_df[col].unique() for col in comparison_group]
     
@@ -316,13 +390,22 @@ def compare_all_frequency_outliers(
         
         # Collect data and labels for Tukey's HSD test
         group_labels.extend([str(group)] * len(group_data_subset))
-        group_data.extend(group_data_subset)
+        group_data.append(group_data_subset)
     
-    # Convert group_data to a numpy array for compatibility with statsmodels
-    group_data = pd.Series(group_data).values
+    # Flatten the group_data list and create a corresponding list of labels
+    flat_group_data = [item for sublist in group_data for item in sublist]
+    flat_group_labels = [group_labels[i] for i in range(len(group_labels))]
+    
+    # Perform ANOVA test
+    anova_result = f_oneway(*group_data)
+    anova_dict = {
+        'F-statistic': anova_result.statistic,
+        'p-value': anova_result.pvalue,
+        'reject': anova_result.pvalue < alpha
+    }
     
     # Perform Tukey's HSD test
-    tukey_result = pairwise_tukeyhsd(endog=group_data, groups=group_labels, alpha=0.05)
+    tukey_result = pairwise_tukeyhsd(endog=flat_group_data, groups=flat_group_labels, alpha=alpha)
     
     # Extract the Tukey HSD results into a dictionary
     tukey_dict = {}
@@ -336,14 +419,14 @@ def compare_all_frequency_outliers(
             'upper': tukey_result.confint[i][1],
             'reject': tukey_result.reject[i]
         }
-        
+    
     mean_results = {
-    'mean': mean_dict,
-    'tukey_results': tukey_dict
+    'Average': mean_dict,
+    'ANOVA': anova_dict,
+    'Tukey HSD': tukey_dict
     }
     
     return mean_results
-
         
 def compare_value_share(
     value,
@@ -496,16 +579,27 @@ def get_categorical_stats(ser:pd.Series, var:str):
     Returns:
         A dictionariy with summary stats.
     '''
-    my_dict = dict()
-    my_dict['Count Non Missing'] = len(ser.dropna())
-    my_df = (
-        pd.DataFrame(ser.value_counts())
-        .reset_index()
-        .rename(columns={var:'Value','count':'Count'})
-    )
-    my_df['Proportion'] = my_df['Count']/my_dict['Count Non Missing']
-    my_dict['Counts And Proportions'] = my_df
-    return my_dict
+
+    # Drop NAs
+    ser_clean = ser.dropna()
+
+    # Get value counts and proportions
+    value_counts = ser_clean.value_counts()
+    proportions = ser_clean.value_counts(normalize=True)
+
+    # Create the dictionary for counts and proportions
+    counts_and_proportions = {
+        value: {'count': count, 'proportion': proportion}
+        for value, count, proportion in zip(value_counts.index, value_counts, proportions)
+    }
+
+    # Create the final dictionary with the required hierarchy
+    result_dict = {
+        "Counts And Proportions": counts_and_proportions,
+        "Count Non Missing": len(ser_clean)
+    }
+
+    return result_dict
 
 
 def get_numerical_stats(ser:pd.Series,var:str):
@@ -675,16 +769,46 @@ def get_variable_type(unique_array:np.ndarray, is_numerical:bool):
     Returns:
         A string with one of the above listed types
     '''
+
+    def is_subset(s1, s2):
+    
+        '''Determines if set s1 is a subset of set s2, correctly handling np.nan values.
+        
+        Arguments:
+        s1 (set): The first set to be checked as a subset.
+        s2 (set): The second set to be checked as a superset.
+        
+        Returns:
+        bool: True if s1 is a subset of s2, accounting for np.nan values, otherwise False.'''
+        
+        def has_nan(s):
+            return any(isinstance(x, float) and np.isnan(x) for x in s)
+        
+        # Remove np.nan and check for subset ignoring np.nan
+        s1_no_nan = {x for x in s1 if not (isinstance(x, float) and np.isnan(x))}
+        s2_no_nan = {x for x in s2 if not (isinstance(x, float) and np.isnan(x))}
+        
+        # Check if both sets have np.nan consistently
+        has_nan_s1 = has_nan(s1)
+        has_nan_s2 = has_nan(s2)
+        
+        # Ensure boolean and numeric types are handled separately
+        def type_safe_issubset(small, large):
+            small_bools = {x for x in small if isinstance(x, bool)}
+            large_bools = {x for x in large if isinstance(x, bool)}
+            small_non_bools = {x for x in small if not isinstance(x, bool)}
+            large_non_bools = {x for x in large if not isinstance(x, bool)}
+            return small_bools.issubset(large_bools) and small_non_bools.issubset(large_non_bools)
+    
+        return type_safe_issubset(s1_no_nan, s2_no_nan) and has_nan_s1 <= has_nan_s2 
+
     if len(unique_array) == 1:
         return 'Constant'
-    elif (
-        (len(unique_array) == 2)
-        and {np.nan}.issubset(set(unique_array))
-    ):
+    elif (len(unique_array) == 2) and is_subset({np.nan}, set(unique_array)):
         return 'Constant With Nulls'
-    elif set(unique_array).issubset({True, False, np.nan}):
+    elif is_subset(set(unique_array), {True, False, np.nan}):
         return 'Binary Bool'
-    elif set(unique_array).issubset({1,0,np.nan}):
+    elif is_subset(set(unique_array), {1, 0, np.nan}):
         return 'Binary Numerical'
     elif is_numerical:
         return 'Numerical'
@@ -759,7 +883,215 @@ def equal_proportions_test_many_samples(n_list:list, hits_list:list):
         nobs = n_list
     )
     test_info = dict()
-    test_info['Chi_2_stat'] = test[0]
-    test_info['P-value'] = test[1]
+    test_info['Chi_2_stat'] = round(test[0],3)
+    test_info['P-value'] = round(test[1],3)
     return test_info
 
+def create_summary(data_dict, alpha = 0.05):
+    '''Creates a summary from the detailed report. This function includes 
+    all the necessary thesholds that booleanizes continuous metrics for flagging.
+    
+    Arguments:
+        data_dict:
+            Dictionary containing the comprehensive report.
+        alpha:
+            Optional alpha threshold for statastical tests.
+    Returns:
+        summary:
+            Summary dictionary. 
+    '''
+
+    summary = {}
+
+    for column_name, column_info in data_dict.items():
+        col_summary = {}
+
+        if (column_info.get('Type', {}) == 'Constant'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+            col_summary['Unique Value'] = list(column_info.get('Unique', {}))
+
+        elif (column_info.get('Type', {}) == 'Constant With Nulls'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+            col_summary['Unique Value'] = list(column_info.get('Unique', {}))
+
+            col_summary['Null Info'] = {}
+            col_summary['Null Info']['Concern Flag'] = bool(column_info.get('Null Info', {}).get('Proportion', {}) > 0.20)
+
+            col_summary['Comparison'] = {}
+            if isinstance(column_info.get('Comparisons', {}), dict):
+                for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
+                    col_summary['Comparison'][comp_group] = {}
+                    col_summary['Comparison'][comp_group]["Chi Sq. Concern Flag: "] = bool(comp_group_value.get('Nulls', {}).get('P-value', {}) < alpha)
+            else:
+                pass
+
+        elif (column_info.get('Type', {}) == 'Binary Numerical'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+            col_summary['Unique Value'] = list(column_info.get('Unique', {}))
+
+            col_summary['Null Info'] = {}
+            col_summary['Null Info']['Concern Flag'] = bool(column_info['Null Info'].get('Proportion', {}) > 0.20)
+
+            col_summary['Stats'] = {}
+            col_summary['Stats']['Concern Flag, Proportion out-of-bound'] = bool(column_info['Stats'].get('True Proportion', {}) > 0.9 or column_info['Stats'].get('True Proportion', {}) < 0.1)
+
+            col_summary['Comparison'] = {}
+            if isinstance(column_info.get('Comparisons', {}), dict):
+                for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
+                    col_summary['Comparison'][comp_group] = {}
+                    comp_values_nulls = column_info['Comparisons'].get(comp_group, {}).get('Nulls', {})
+                    col_summary['Comparison'][comp_group]['Concern Flag, Chi-Sq. test - Nulls'] = bool(comp_values_nulls.get('P-value', {}) < alpha)
+
+                    comp_values_trues = column_info['Comparisons'].get(comp_group, {}).get('Proportion True', {})
+                    col_summary['Comparison'][comp_group]['Concern Flag, Chi-Sq. test - True Proportion'] = bool(comp_values_trues.get('P-value', {}) < alpha)
+            else:
+                pass
+
+        elif (column_info.get('Type', {}) == 'Numerical'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+
+            if(len(column_info.get('Unique', {})) > 10):
+                col_summary['Unique Values'] = 'Continuous Values...'
+            else:
+                col_summary['Unique Values'] = column_info.get('Unique', {})
+
+            col_summary['Null Info'] = {}
+            col_summary['Null Info']['Concern Flag'] = bool(column_info.get('Null Info', {}).get('Proportion', {}) > 0.20)
+
+            col_summary['Stats'] = {}
+            col_summary['Stats']['Concern Flag, Upper Outlier Crossed'] = bool(column_info['Stats'].get('Upper Outlier Count', {}) > 0)
+            col_summary['Stats']['Concern Flag, Lower Outlier Crossed'] = bool(column_info['Stats'].get('Lower Outlier Count', {}) > 0)
+            col_summary['Stats']['Concern Flag, Frequency Outlier Crossed'] = bool(column_info['Stats'].get('Frequency Outlier Count', {}) > 0)
+
+            col_summary['Comparison'] = {}
+            if isinstance(column_info.get('Comparisons', {}), dict):
+                for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
+                    col_summary['Comparison'][comp_group] = {}
+                    comp_values = column_info['Comparisons'].get(comp_group, {}).get('Mean', {})
+                    col_summary['Comparison'][comp_group]['Concern Flag, ANOVA'] = bool(comp_values.get('ANOVA', {}).get('reject', {}))
+            else:
+                pass  
+
+        elif (column_info.get('Type', {}) == 'Binary Categorical'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+
+            if(len(column_info.get('Unique', {})) > 10):
+                col_summary['Unique Values'] = 'Continuous Values...'
+            else:
+                col_summary['Unique Values'] = list(column_info.get('Unique', {}))
+
+            col_summary['Null Info'] = {}
+            col_summary['Null Info']['Concern Flag'] = bool(column_info.get('Null Info', {}).get('Proportion', {}) > 0.20)
+
+            col_summary['Stats'] = {}
+            for group, group_value in column_info.get('Stats', {}).get('Counts And Proportions',{}).items():
+                col_summary['Stats']['Concern Flag, Proportion - ' + group] = bool(group_value.get('proportion', {}) < 0.1 or group_value.get('proportion', {}) > 0.9)
+
+            col_summary['Comparison'] = {}
+            if isinstance(column_info.get('Comparisons', {}), dict):
+                for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
+                    for group, group_value in column_info.get('Comparisons', {}).get(comp_group,{}).get('Value Shares', {}).items():
+                        col_summary['Comparison'][comp_group] = {}
+                        col_summary['Comparison'][comp_group]["Concern Flag, Chi-Sq. test - " + group] = bool(group_value.get('P-value', {}) < alpha)
+            else:
+                pass
+
+
+        elif (column_info.get('Type', {}) == 'Categorical'):
+            col_summary['Determined Type'] = column_info.get('Type', {})
+
+            if(len(column_info.get('Unique', {})) > 10):
+                col_summary['Unique Values'] = 'Many unique values'
+            else:
+                col_summary['Unique Values'] = list(column_info.get('Unique', {}))
+
+            col_summary['Null Info'] = {}
+            col_summary['Null Info']['Concern Flag'] = bool(column_info.get('Null Info', {}).get('Proportion', {}) > 0.20)
+
+            col_summary['Stats'] = {}
+            counts = []
+            for group, group_value in column_info.get('Stats', {}).get('Counts And Proportions',{}).items():
+                counts.append(group_value.get('count', {}))
+
+            # Calculate the mean and standard deviation
+            mean = np.mean(counts)
+            std = np.std(counts)
+
+            # Calculate the upper and lower bounds 3 standard deviations away from the mean
+            upper_bound = mean + 3*std
+            lower_bound = mean - 3*std
+
+            # Check if any number is outside the bounds (one True in flags is enough)
+            has_outlier = any((x < lower_bound) | (x > upper_bound) for x in counts)
+            col_summary['Stats']['Concern Flag, Category Dispropotionate'] = has_outlier
+
+            col_summary['Comparison'] = {}
+            if isinstance(column_info.get('Comparisons', {}), dict):
+                for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
+                    for group, group_value in column_info.get('Comparisons', {}).get(comp_group,{}).get('Value Shares', {}).items():
+                        col_summary['Comparison']["Concern Flag, Chi-Sq. test - " + group] = bool(group_value.get('P-value', {}) < alpha)
+            else:
+                pass
+
+        summary[column_name] = col_summary
+
+    return summary
+
+def filter_concern_flags(d):
+    '''Filter only those dictionary instances, where the value is True.
+    Arguments:
+        d:
+            Summary Dictionary
+    Returns:
+        result:
+            Dictionary with concern flags
+    '''
+    def recursive_filter(d):
+        if isinstance(d, dict):
+            filtered = {}
+            for key, value in d.items():
+                try:
+                    if isinstance(value, dict):
+                        filtered_branch = recursive_filter(value)
+                        if filtered_branch:
+                            filtered[key] = filtered_branch
+                    elif isinstance(value, bool) and value == True:
+                        filtered[key] = value
+                    else: 
+                        #print("Is not Bool or is False", value, type(value))
+                        #filtered[key] = value
+                        pass
+                except Exception as e:
+                    print(e)
+                    #print("ERROR in ", key, value)
+                    #filtered[key] = "ERROR in " + str(key) + str(value)
+            return filtered if filtered else None
+        return None
+
+    result = recursive_filter(d)
+    return result if result else {}
+
+
+def build_tree_string(d, prefix=''):
+    """
+    Recursively builds a string representation of a nested dictionary as a tree with branches.
+
+    Args:
+        d (dict): The nested dictionary.
+        prefix (str): The current prefix.
+
+    Returns:
+        str: The string representation of the tree.
+    """
+    tree_string = ""
+    keys = list(d.keys())
+    for i, key in enumerate(keys):
+        is_last = (i == len(keys) - 1)
+        if isinstance(d[key], dict):
+            tree_string += prefix + ('└── ' if is_last else '├── ') + str(key) + "\n"
+            new_prefix = prefix + ('    ' if is_last else '│   ')
+            tree_string += build_tree_string(d[key], new_prefix)
+        else:
+            tree_string += prefix + ('└── ' if is_last else '├── ') + str(key) + "\n"
+            tree_string += prefix + ('    ' if is_last else '│   ') + '└── ' + str(d[key]) + "\n"
+    return tree_string
