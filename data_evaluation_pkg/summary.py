@@ -7,12 +7,14 @@ from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from scipy.stats import f_oneway
 import itertools
 import warnings
+from tqdm import tqdm
 import logging
 import time
+import os
+import datetime
 
 
-
-def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 0.05 ):
+def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 0.05, path: str = 'export.csv'):
     '''Variable summaries with tests for consistency across groups.
     
     Arguments:
@@ -36,6 +38,10 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     #logging.disable(logging.CRITICAL)
 
+    # Create a progress bar object
+    #pbar = tqdm(total=len(df.columns), desc='Column Evaluation Progress', bar_format='{l_bar}{bar} | {n_fmt}/{total_fmt}    ')
+
+
     # Define a dictionary where all info will go
     info_dict = dict()
 
@@ -43,6 +49,7 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 
     for idx, var in enumerate(df.columns, start=1):
         #Note start time of the loop
         start_time = time.time()
+        logging.info(f'\n{"": <0}Evaluating: {var:<{50}}')
 
         ser = df[var]
         # Dict to hold all info about this variable
@@ -93,7 +100,9 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 
         end_time = time.time()  # Record end time
         duration = end_time - start_time  # Calculate duration
         logging.info(f'\n{"": <0}Evaluation Successful ({idx}/{len(df.columns)}): {var:<{50}} (Duration: {duration:.2f} seconds)')
+        #pbar.update(1)  # Update progress bar for each sub-task
 
+    #pbar.close()
 
     output = {
         'detailed_report': build_tree_string(info_dict),
@@ -101,11 +110,14 @@ def evaluate_data(df:pd.DataFrame, comparison_groups:list[list], alpha: float = 
         'flag_report': build_tree_string(filter_concern_flags(create_summary(info_dict, alpha)))
     }
 
+    export_report(output, comparison_groups, path)
+
+    # Restore default warning settings
+    warnings.filterwarnings("default")
+
     return output
         
     
-    # Restore default warning settings
-    warnings.filterwarnings("default")
 
     
 
@@ -940,7 +952,8 @@ def create_summary(data_dict, alpha = 0.05):
                 for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
                     col_summary['Comparison'][comp_group] = {}
                     comp_values_nulls = column_info['Comparisons'].get(comp_group, {}).get('Nulls', {})
-                    col_summary['Comparison'][comp_group]['Concern Flag, Chi-Sq. test - Nulls'] = bool(comp_values_nulls.get('P-value', {}) < alpha)
+                    col_summary['Comparison'][comp_group]['Concern Flag, Chi-Sq. test - Nulls'] = bool(isinstance(comp_values_nulls, dict) and comp_values_nulls.get('P-value', {}) < alpha)
+
 
                     comp_values_trues = column_info['Comparisons'].get(comp_group, {}).get('Proportion True', {})
                     col_summary['Comparison'][comp_group]['Concern Flag, Chi-Sq. test - True Proportion'] = bool(comp_values_trues.get('P-value', {}) < alpha)
@@ -985,14 +998,14 @@ def create_summary(data_dict, alpha = 0.05):
 
             col_summary['Stats'] = {}
             for group, group_value in column_info.get('Stats', {}).get('Counts And Proportions',{}).items():
-                col_summary['Stats']['Concern Flag, Proportion - ' + group] = bool(group_value.get('proportion', {}) < 0.1 or group_value.get('proportion', {}) > 0.9)
+                col_summary['Stats']['Concern Flag, Proportion - ' + str(group)] = bool(group_value.get('proportion', {}) < 0.1 or group_value.get('proportion', {}) > 0.9)
 
             col_summary['Comparison'] = {}
             if isinstance(column_info.get('Comparisons', {}), dict):
                 for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
                     for group, group_value in column_info.get('Comparisons', {}).get(comp_group,{}).get('Value Shares', {}).items():
                         col_summary['Comparison'][comp_group] = {}
-                        col_summary['Comparison'][comp_group]["Concern Flag, Chi-Sq. test - " + group] = bool(group_value.get('P-value', {}) < alpha)
+                        col_summary['Comparison'][comp_group]["Concern Flag, Chi-Sq. test - " + str(group)] = bool(group_value.get('P-value', {}) < alpha)
             else:
                 pass
 
@@ -1029,7 +1042,8 @@ def create_summary(data_dict, alpha = 0.05):
             if isinstance(column_info.get('Comparisons', {}), dict):
                 for comp_group, comp_group_value in column_info.get('Comparisons', {}).items():
                     for group, group_value in column_info.get('Comparisons', {}).get(comp_group,{}).get('Value Shares', {}).items():
-                        col_summary['Comparison']["Concern Flag, Chi-Sq. test - " + group] = bool(group_value.get('P-value', {}) < alpha)
+                        col_summary['Comparison'][comp_group] = {}
+                        col_summary['Comparison'][comp_group]["Concern Flag, Chi-Sq. test - " + str(group)] = bool(group_value.get('P-value', {}) < alpha)
             else:
                 pass
 
@@ -1095,3 +1109,32 @@ def build_tree_string(d, prefix=''):
             tree_string += prefix + ('└── ' if is_last else '├── ') + str(key) + "\n"
             tree_string += prefix + ('    ' if is_last else '│   ') + '└── ' + str(d[key]) + "\n"
     return tree_string
+
+def export_report(output, comparison_groups, path):
+        file_name = os.path.splitext(os.path.basename(path))[0]
+        file_name_wex = os.path.basename(path)
+        current_time = datetime.datetime.now().strftime("%Y%m%d_%I:%M:%S%p")
+        dynamic_file_name = f"{file_name}-{current_time}.txt"
+
+        # Open the file in write mode with the dynamic file name
+        with open(dynamic_file_name, 'w') as file:
+
+            file.write(f"Dataset: {file_name}\n")
+            file.write(f"Comparison Groups: {comparison_groups}")
+            file.write("\n\n")  # Add some space between sections
+
+            file.write("================================================ FLAG REPORT ================================================\n")
+            file.write(output['flag_report'])
+            file.write("\n\n")  # Add some space between sections
+
+            file.write("================================================ SUMMARY REPORT================================================\n")
+            file.write(output['summary_report'])
+            file.write("\n\n")  # Add some space between sections
+
+            file.write("================================================ DETAILED REPORT ================================================\n")
+            file.write(output['detailed_report'])
+            file.write("\n")  # No need for extra space at the end
+
+        logging.info(f'\nReport has been written to {dynamic_file_name} and stored at {os.getcwd()}')
+
+        #print(f"Report has been written to {dynamic_file_name}.")
