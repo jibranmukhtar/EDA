@@ -9,4 +9,3 @@ For example, if we have mileage data for various cars under different automobile
 - **Segmentation Analysis:** Analyze data based on segments defined by a categorical column.
 - **Statistical Comparisons:** Perform statistical tests to compare means, variances, and other metrics between segments.
 - **Null Analysis:** Evaluate and compare the presence of null values across segments.
-- **Visualization Tools:** Generate visual representations of the analysis for better insights.
