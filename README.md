@@ -10,4 +10,4 @@ For example, if we have mileage data for various cars under different automobile
 - **Statistical Comparisons:** Perform statistical tests to compare means, variances, and other metrics between segments.
 - **Null Analysis:** Evaluate and compare the presence of null values across segments.
 - **Report Choice:** Choice in evaluating based on a detailed report, a summary report and a flag report which flags inconsistencies based on pre-determined thresholds.
-- **Additional Features:** It also offers standard EDA (Exploratory Data Analysis) features such as unique value count, null count, proportion of null values, column type evaluation, and outlier analysis.
+- **Additional Features:** It also offers standard EDA features such as unique value count, null count, proportion of null values, column type evaluation, and outlier analysis.
